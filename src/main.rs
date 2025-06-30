@@ -6,11 +6,13 @@ use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
 use solana_sdk::signature::Keypair;
 use solana_sdk::signer::Signer;
+use solana_sdk::system_instruction;
 use solana_sdk::{bs58, signature::Signature};
-use spl_token::instruction::{initialize_mint, mint_to};
+use spl_token::instruction::{initialize_mint, mint_to, transfer_checked};
 use std::str::FromStr;
 use tokio::net::TcpListener;
 
+//1. Generate keypair
 #[derive(Serialize)]
 struct KeypairResponse {
     success: bool,
@@ -38,7 +40,7 @@ async fn generate_keypair() -> Json<KeypairResponse> {
     })
 }
 
-//-----------------------------------------------------------------//
+//2. Create Token-----------------------------------------------------------------//
 
 #[derive(Deserialize)]
 struct CreateTokenRequest {
@@ -97,7 +99,7 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
     })
 }
 
-//------------------------------------------------------//
+//3. Mint Token------------------------------------------------------//
 
 #[derive(Deserialize)]
 struct MintTokenRequest {
@@ -205,7 +207,7 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
     })
 }
 
-//---------------------------------------------------------------//
+//4. Sign message---------------------------------------------------------------//
 
 #[derive(Deserialize)]
 struct SignMessageRequest {
@@ -351,6 +353,188 @@ async fn verify_message_handler(
         error: None,
     })
 }
+//SEND SOL------------------------------------
+
+#[derive(Deserialize)]
+struct SendSolRequest {
+    from: String,
+    to: String,
+    lamports: u64,
+}
+
+#[derive(Serialize)]
+struct SendSolResponse {
+    success: bool,
+    data: Option<SendSolData>,
+    error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SendSolData {
+    program_id: String,
+    accounts: Vec<String>,
+    instruction_data: String,
+}
+
+async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolResponse> {
+    // Validate public keys
+    let from_pubkey = match Pubkey::from_str(&req.from) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return Json(SendSolResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid sender public key".to_string()),
+            });
+        }
+    };
+    let to_pubkey = match Pubkey::from_str(&req.to) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return Json(SendSolResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid recipient public key".to_string()),
+            });
+        }
+    };
+
+    // Validate lamports
+    if req.lamports == 0 {
+        return Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("Lamports must be a positive integer".to_string()),
+        });
+    }
+
+    // Create the transfer instruction
+    let ix = system_instruction::transfer(&from_pubkey, &to_pubkey, req.lamports);
+
+    // Prepare response data
+    let program_id = ix.program_id.to_string();
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|meta| meta.pubkey.to_string())
+        .collect();
+    let instruction_data = base64::encode(ix.data);
+
+    Json(SendSolResponse {
+        success: true,
+        data: Some(SendSolData {
+            program_id,
+            accounts,
+            instruction_data,
+        }),
+        error: None,
+    })
+}
+
+//7. Send token-------------------------------------------------------------------
+#[derive(Deserialize)]
+struct SendTokenRequest {
+    destination: String,
+    mint: String,
+    owner: String,
+    amount: u64,
+}
+
+#[derive(Serialize)]
+struct AccountMetaInfo7Ix {
+    pubkey: String,
+    isSigner: bool,
+}
+
+#[derive(Serialize)]
+struct SendTokenData {
+    program_id: String,
+    accounts: Vec<AccountMetaInfo>,
+    instruction_data: String,
+}
+
+#[derive(Serialize)]
+struct SendTokenResponse {
+    success: bool,
+    data: Option<SendTokenData>,
+    error: Option<String>,
+}
+
+async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendTokenResponse> {
+    // Validate pubkeys
+    let destination = match Pubkey::from_str(&req.destination) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid destination pubkey".to_string()),
+            });
+        }
+    };
+    let mint = match Pubkey::from_str(&req.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid mint pubkey".to_string()),
+            });
+        }
+    };
+    let owner = match Pubkey::from_str(&req.owner) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid owner pubkey".to_string()),
+            });
+        }
+    };
+
+    let ix = match transfer_checked(
+        &spl_token::id(),
+        &destination,
+        &mint,
+        &destination,
+        &owner,
+        &[],
+        req.amount,
+        0,
+    ) {
+        Ok(ix) => ix,
+        Err(e) => {
+            return Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to create transfer instruction: {}", e)),
+            });
+        }
+    };
+
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|meta| AccountMetaInfo {
+            pubkey: meta.pubkey.to_string(),
+            is_signer: meta.is_signer,
+            is_writable: meta.is_writable,
+        })
+        .collect();
+
+    let instruction_data = base64::encode(ix.data);
+
+    Json(SendTokenResponse {
+        success: true,
+        data: Some(SendTokenData {
+            program_id: ix.program_id.to_string(),
+            accounts,
+            instruction_data,
+        }),
+        error: None,
+    })
+}
 
 #[tokio::main]
 async fn main() {
@@ -359,11 +543,14 @@ async fn main() {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let app = Router::new()
+        //Working
         .route("/keypair", post(generate_keypair))
+        //Working
         .route("/token/create", post(create_token))
         // .route("/token/mint", post(mint_token)); //not working as expected
-        .route("/message/sign", post(sign_message_handler));
-    // .route("/message/verify", post(verify_message_handler));
+        // .route("/message/sign", post(sign_message_handler)); //not working as expected
+        .route("/message/verify", post(verify_message_handler));
+    // .route("/send/sol", post(send_sol_handler));
 
     let tcp = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
