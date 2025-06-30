@@ -17,7 +17,6 @@ use tokio::net::TcpListener;
 struct KeypairResponse {
     success: bool,
     data: Option<KeypairData>,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -36,7 +35,6 @@ async fn generate_keypair() -> Json<KeypairResponse> {
     Json(KeypairResponse {
         success: true,
         data: Some(KeypairData { pubkey, secret }),
-        error: None,
     })
 }
 
@@ -53,7 +51,6 @@ struct CreateTokenRequest {
 struct CreateTokenResponse {
     success: bool,
     data: Option<CreateTokenData>, // Changed from Option<String>
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -70,7 +67,6 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
             return Json(CreateTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid mintAuthority pubkey".to_string()),
             });
         }
     };
@@ -80,7 +76,6 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
             return Json(CreateTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid mint pubkey".to_string()),
             });
         }
     };
@@ -92,7 +87,6 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
                 return Json(CreateTokenResponse {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to create instruction: {e}")),
                 });
             }
         };
@@ -117,7 +111,6 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
             accounts,
             instruction_data,
         }),
-        error: None,
     })
 }
 
@@ -135,7 +128,6 @@ struct MintTokenRequest {
 struct MintTokenResponse {
     success: bool,
     data: Option<MintInstructionData>,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -160,7 +152,6 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
             return Json(MintTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid mint pubkey".to_string()),
             });
         }
     };
@@ -170,7 +161,6 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
             return Json(MintTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid destination pubkey".to_string()),
             });
         }
     };
@@ -180,7 +170,6 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
             return Json(MintTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid authority pubkey".to_string()),
             });
         }
     };
@@ -199,7 +188,6 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
             return Json(MintTokenResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to create mint_to instruction: {e}")),
             });
         }
     };
@@ -225,7 +213,6 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
             accounts,
             instruction_data,
         }),
-        error: None,
     })
 }
 
@@ -241,7 +228,6 @@ struct SignMessageRequest {
 struct SignMessageResponse {
     success: bool,
     data: Option<SignMessageData>,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -257,7 +243,6 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
         return Json(SignMessageResponse {
             success: false,
             data: None,
-            error: Some("Missing required fields".to_string()),
         });
     }
 
@@ -268,7 +253,6 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
             return Json(SignMessageResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid secret key format".to_string()),
             });
         }
     };
@@ -280,7 +264,6 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
             return Json(SignMessageResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid secret key bytes".to_string()),
             });
         }
     };
@@ -298,7 +281,6 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
             public_key,
             message: req.message,
         }),
-        error: None,
     })
 }
 
@@ -314,7 +296,6 @@ struct VerifyMessageRequest {
 struct VerifyMessageResponse {
     success: bool,
     data: Option<VerifyMessageData>,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -333,7 +314,6 @@ async fn verify_message_handler(
             return Json(VerifyMessageResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid base64 signature".to_string()),
             });
         }
     };
@@ -344,7 +324,6 @@ async fn verify_message_handler(
             return Json(VerifyMessageResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid signature bytes".to_string()),
             });
         }
     };
@@ -355,7 +334,6 @@ async fn verify_message_handler(
             return Json(VerifyMessageResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid pubkey".to_string()),
             });
         }
     };
@@ -369,7 +347,6 @@ async fn verify_message_handler(
             message: req.message,
             pubkey: req.pubkey,
         }),
-        error: None,
     })
 }
 //6. SEND SOL------------------------------------
@@ -385,7 +362,6 @@ struct SendSolRequest {
 struct SendSolResponse {
     success: bool,
     data: Option<SendSolData>,
-    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -402,7 +378,6 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
             return Json(SendSolResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid sender public key".to_string()),
             });
         }
     };
@@ -412,7 +387,6 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
             return Json(SendSolResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid recipient public key".to_string()),
             });
         }
     };
@@ -421,7 +395,6 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
         return Json(SendSolResponse {
             success: false,
             data: None,
-            error: Some("Lamports must be a positive integer".to_string()),
         });
     }
 
@@ -442,7 +415,6 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
             accounts,
             instruction_data,
         }),
-        error: None,
     })
 }
 
@@ -472,7 +444,6 @@ struct SendTokenData {
 struct SendTokenResponse {
     success: bool,
     data: Option<SendTokenData>,
-    error: Option<String>,
 }
 
 async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendTokenResponse> {
@@ -483,7 +454,6 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
             return Json(SendTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid destination pubkey".to_string()),
             });
         }
     };
@@ -493,7 +463,6 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
             return Json(SendTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid mint pubkey".to_string()),
             });
         }
     };
@@ -503,7 +472,6 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
             return Json(SendTokenResponse {
                 success: false,
                 data: None,
-                error: Some("Invalid owner pubkey".to_string()),
             });
         }
     };
@@ -523,7 +491,6 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
             return Json(SendTokenResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to create transfer instruction: {}", e)),
             });
         }
     };
@@ -547,7 +514,6 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
             accounts,
             instruction_data,
         }),
-        error: None,
     })
 }
 
