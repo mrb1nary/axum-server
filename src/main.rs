@@ -83,7 +83,7 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
     let ix: Instruction =
         match initialize_mint(&spl_token::id(), &mint, &mint_authority, None, req.decimals) {
             Ok(ix) => ix,
-            Err(e) => {
+            Err(_) => {
                 return Json(CreateTokenResponse {
                     success: false,
                     data: None,
@@ -184,7 +184,7 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Json<MintTokenResponse
         req.amount,
     ) {
         Ok(ix) => ix,
-        Err(e) => {
+        Err(_) => {
             return Json(MintTokenResponse {
                 success: false,
                 data: None,
@@ -487,7 +487,7 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
         0,
     ) {
         Ok(ix) => ix,
-        Err(e) => {
+        Err(_) => {
             return Json(SendTokenResponse {
                 success: false,
                 data: None,
