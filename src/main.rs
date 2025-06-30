@@ -97,7 +97,6 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
             }
         };
 
-    // Prepare the account meta info for response
     let accounts = ix
         .accounts
         .iter()
@@ -286,13 +285,10 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
         }
     };
 
-    // Sign the message
     let signature = keypair.sign_message(req.message.as_bytes());
 
-    // Encode signature as base64
     let signature_base64 = base64::encode(signature.as_ref());
 
-    // Get public key as base58
     let public_key = keypair.pubkey().to_string();
 
     Json(SignMessageResponse {
@@ -306,7 +302,7 @@ async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Json<SignM
     })
 }
 
-//--------------------------------------------------------//
+//5. Verify message--------------------------------------------------------//
 #[derive(Deserialize)]
 struct VerifyMessageRequest {
     message: String,
@@ -376,7 +372,7 @@ async fn verify_message_handler(
         error: None,
     })
 }
-//SEND SOL------------------------------------
+//6. SEND SOL------------------------------------
 
 #[derive(Deserialize)]
 struct SendSolRequest {
@@ -400,7 +396,6 @@ struct SendSolData {
 }
 
 async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolResponse> {
-    // Validate public keys
     let from_pubkey = match Pubkey::from_str(&req.from) {
         Ok(pk) => pk,
         Err(_) => {
@@ -422,7 +417,6 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
         }
     };
 
-    // Validate lamports
     if req.lamports == 0 {
         return Json(SendSolResponse {
             success: false,
@@ -431,10 +425,8 @@ async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Json<SendSolRespon
         });
     }
 
-    // Create the transfer instruction
     let ix = system_instruction::transfer(&from_pubkey, &to_pubkey, req.lamports);
 
-    // Prepare response data
     let program_id = ix.program_id.to_string();
     let accounts = ix
         .accounts
@@ -518,15 +510,14 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
 
     let ix = match transfer_checked(
         &spl_token::id(),
-        &owner,          // source token account
+        &owner,
         &mint,
-        &destination,    // destination token account
-        &owner,          // owner of source
+        &destination,
+        &owner,
         &[],
         req.amount,
-        0, // decimals — consider making this dynamic
-    )
-     {
+        0,
+    ) {
         Ok(ix) => ix,
         Err(e) => {
             return Json(SendTokenResponse {
