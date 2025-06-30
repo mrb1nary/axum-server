@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 
-use axum::{Json, Router, routing::post, http::StatusCode};
+use axum::{Json, Router, routing::post, http::StatusCode, response::IntoResponse};
 use serde::{Deserialize, Serialize};
 use solana_sdk::instruction::Instruction;
 use solana_sdk::pubkey::Pubkey;
@@ -12,22 +12,14 @@ use spl_token::instruction::{initialize_mint, mint_to, transfer_checked};
 use std::str::FromStr;
 use tokio::net::TcpListener;
 
-#[derive(Serialize)]
-struct ErrorResponse {
-    success: bool,
-    error: String,
-}
-
-impl ErrorResponse {
-    fn new(msg: &str) -> (StatusCode, Json<ErrorResponse>) {
-        (StatusCode::BAD_REQUEST, Json(ErrorResponse { success: false, error: msg.to_string() }))
-    }
-}
-
+// 1. Generate keypair
 #[derive(Serialize)]
 struct KeypairResponse {
     success: bool,
-    data: KeypairData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<KeypairData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -36,20 +28,23 @@ struct KeypairData {
     secret: String,
 }
 
-async fn generate_keypair() -> Json<KeypairResponse> {
+async fn generate_keypair() -> impl IntoResponse {
     let keypair = Keypair::new();
     let pubkey = keypair.pubkey().to_string();
     let secret = bs58::encode(keypair.to_bytes()).into_string();
 
-    Json(KeypairResponse {
+    (StatusCode::OK, Json(KeypairResponse {
         success: true,
-        data: KeypairData { pubkey, secret },
-    })
+        data: Some(KeypairData { pubkey, secret }),
+        error: None,
+    }))
 }
 
+// 2. Create Token
 #[derive(Deserialize)]
 struct CreateTokenRequest {
-    mintAuthority: String,
+    #[serde(rename = "mintAuthority")]
+    mint_authority: String,
     mint: String,
     decimals: u8,
 }
@@ -57,7 +52,10 @@ struct CreateTokenRequest {
 #[derive(Serialize)]
 struct CreateTokenResponse {
     success: bool,
-    data: CreateTokenData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<CreateTokenData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -74,12 +72,71 @@ struct AccountMetaInfo {
     is_writable: bool,
 }
 
-async fn create_token(Json(req): Json<CreateTokenRequest>) -> Result<Json<CreateTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mint_authority = Pubkey::from_str(&req.mintAuthority).map_err(|_| ErrorResponse::new("Invalid mint authority pubkey"))?;
-    let mint = Pubkey::from_str(&req.mint).map_err(|_| ErrorResponse::new("Invalid mint pubkey"))?;
+async fn create_token(Json(req): Json<CreateTokenRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.mint_authority.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mintAuthority is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.mint.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mint is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.decimals > 9 {
+        return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+            success: false,
+            data: None,
+            error: Some("decimals must be between 0 and 9".to_string()),
+        }));
+    }
 
-    let ix = initialize_mint(&spl_token::id(), &mint, &mint_authority, None, req.decimals)
-        .map_err(|_| ErrorResponse::new("Failed to create initialize_mint instruction"))?;
+    // Validate pubkey formats
+    let mint_authority = match Pubkey::from_str(&req.mint_authority) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid mintAuthority format".to_string()),
+            }));
+        }
+    };
+    let mint = match Pubkey::from_str(&req.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid mint format".to_string()),
+            }));
+        }
+    };
+
+    // Check if mint and authority are the same (edge case)
+    if mint_authority == mint {
+        return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mintAuthority and mint cannot be the same".to_string()),
+        }));
+    }
+
+    let ix: Instruction = match initialize_mint(&spl_token::id(), &mint, &mint_authority, None, req.decimals) {
+        Ok(ix) => ix,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(CreateTokenResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to create instruction: {}", e)),
+            }));
+        }
+    };
 
     let accounts = ix.accounts.iter().map(|meta| AccountMetaInfo {
         pubkey: meta.pubkey.to_string(),
@@ -89,16 +146,18 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Result<Json<Create
 
     let instruction_data = base64::encode(ix.data);
 
-    Ok(Json(CreateTokenResponse {
+    (StatusCode::OK, Json(CreateTokenResponse {
         success: true,
-        data: CreateTokenData {
+        data: Some(CreateTokenData {
             program_id: ix.program_id.to_string(),
             accounts,
             instruction_data,
-        },
+        }),
+        error: None,
     }))
 }
 
+// 3. Mint Token
 #[derive(Deserialize)]
 struct MintTokenRequest {
     mint: String,
@@ -110,7 +169,10 @@ struct MintTokenRequest {
 #[derive(Serialize)]
 struct MintTokenResponse {
     success: bool,
-    data: MintInstructionData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<MintInstructionData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -120,13 +182,95 @@ struct MintInstructionData {
     instruction_data: String,
 }
 
-async fn mint_token(Json(req): Json<MintTokenRequest>) -> Result<Json<MintTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let mint = Pubkey::from_str(&req.mint).map_err(|_| ErrorResponse::new("Invalid mint pubkey"))?;
-    let destination = Pubkey::from_str(&req.destination).map_err(|_| ErrorResponse::new("Invalid destination pubkey"))?;
-    let authority = Pubkey::from_str(&req.authority).map_err(|_| ErrorResponse::new("Invalid authority pubkey"))?;
+async fn mint_token(Json(req): Json<MintTokenRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.mint.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mint is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.destination.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("destination is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.authority.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("authority is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.amount == 0 {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("amount must be greater than 0".to_string()),
+        }));
+    }
+    if req.amount > u64::MAX / 2 {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("amount is too large".to_string()),
+        }));
+    }
 
-    let ix = mint_to(&spl_token::id(), &mint, &destination, &authority, &[], req.amount)
-        .map_err(|_| ErrorResponse::new("Failed to create mint_to instruction"))?;
+    // Validate pubkey formats
+    let mint = match Pubkey::from_str(&req.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid mint format".to_string()),
+            }));
+        }
+    };
+    let destination = match Pubkey::from_str(&req.destination) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid destination format".to_string()),
+            }));
+        }
+    };
+    let authority = match Pubkey::from_str(&req.authority) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid authority format".to_string()),
+            }));
+        }
+    };
+
+    // Check if mint and destination are the same (edge case)
+    if mint == destination {
+        return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mint and destination cannot be the same".to_string()),
+        }));
+    }
+
+    let ix = match mint_to(&spl_token::id(), &mint, &destination, &authority, &[], req.amount) {
+        Ok(ix) => ix,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(MintTokenResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to create mint instruction: {}", e)),
+            }));
+        }
+    };
 
     let accounts = ix.accounts.iter().map(|meta| AccountMetaInfo {
         pubkey: meta.pubkey.to_string(),
@@ -136,16 +280,18 @@ async fn mint_token(Json(req): Json<MintTokenRequest>) -> Result<Json<MintTokenR
 
     let instruction_data = base64::encode(ix.data);
 
-    Ok(Json(MintTokenResponse {
+    (StatusCode::OK, Json(MintTokenResponse {
         success: true,
-        data: MintInstructionData {
+        data: Some(MintInstructionData {
             program_id: ix.program_id.to_string(),
             accounts,
             instruction_data,
-        },
+        }),
+        error: None,
     }))
 }
 
+// 4. Sign Message
 #[derive(Deserialize)]
 struct SignMessageRequest {
     message: String,
@@ -155,7 +301,10 @@ struct SignMessageRequest {
 #[derive(Serialize)]
 struct SignMessageResponse {
     success: bool,
-    data: SignMessageData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<SignMessageData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -165,28 +314,78 @@ struct SignMessageData {
     message: String,
 }
 
-async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> Result<Json<SignMessageResponse>, (StatusCode, Json<ErrorResponse>)> {
-    if req.message.is_empty() || req.secret.is_empty() {
-        return Err(ErrorResponse::new("Missing message or secret"));
+async fn sign_message_handler(Json(req): Json<SignMessageRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.message.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+            success: false,
+            data: None,
+            error: Some("message is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.secret.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+            success: false,
+            data: None,
+            error: Some("secret is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.message.len() > 1024 {
+        return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+            success: false,
+            data: None,
+            error: Some("message is too long (max 1024 characters)".to_string()),
+        }));
     }
 
-    let secret_bytes = bs58::decode(&req.secret).into_vec().map_err(|_| ErrorResponse::new("Invalid secret encoding"))?;
-    let keypair = Keypair::from_bytes(&secret_bytes).map_err(|_| ErrorResponse::new("Invalid secret bytes"))?;
+    // Validate secret key format
+    let secret_bytes = match bs58::decode(&req.secret).into_vec() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid secret key format".to_string()),
+            }));
+        }
+    };
+
+    // Check secret key length
+    if secret_bytes.len() != 64 {
+        return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+            success: false,
+            data: None,
+            error: Some("Invalid secret key length".to_string()),
+        }));
+    }
+
+    let keypair = match Keypair::from_bytes(&secret_bytes) {
+        Ok(kp) => kp,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SignMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid secret key bytes".to_string()),
+            }));
+        }
+    };
 
     let signature = keypair.sign_message(req.message.as_bytes());
     let signature_base64 = base64::encode(signature.as_ref());
     let public_key = keypair.pubkey().to_string();
 
-    Ok(Json(SignMessageResponse {
+    (StatusCode::OK, Json(SignMessageResponse {
         success: true,
-        data: SignMessageData {
+        data: Some(SignMessageData {
             signature: signature_base64,
             public_key,
             message: req.message,
-        },
+        }),
+        error: None,
     }))
 }
 
+// 5. Verify Message
 #[derive(Deserialize)]
 struct VerifyMessageRequest {
     message: String,
@@ -197,7 +396,10 @@ struct VerifyMessageRequest {
 #[derive(Serialize)]
 struct VerifyMessageResponse {
     success: bool,
-    data: VerifyMessageData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<VerifyMessageData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -207,23 +409,94 @@ struct VerifyMessageData {
     pubkey: String,
 }
 
-async fn verify_message_handler(Json(req): Json<VerifyMessageRequest>) -> Result<Json<VerifyMessageResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let signature_bytes = base64::decode(&req.signature).map_err(|_| ErrorResponse::new("Invalid base64 signature"))?;
-    let signature = Signature::try_from(signature_bytes.as_slice()).map_err(|_| ErrorResponse::new("Invalid signature bytes"))?;
-    let pubkey = Pubkey::from_str(&req.pubkey).map_err(|_| ErrorResponse::new("Invalid pubkey"))?;
+async fn verify_message_handler(Json(req): Json<VerifyMessageRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.message.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+            success: false,
+            data: None,
+            error: Some("message is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.signature.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+            success: false,
+            data: None,
+            error: Some("signature is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.pubkey.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+            success: false,
+            data: None,
+            error: Some("pubkey is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.message.len() > 1024 {
+        return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+            success: false,
+            data: None,
+            error: Some("message is too long (max 1024 characters)".to_string()),
+        }));
+    }
+
+    // Validate signature format
+    let signature_bytes = match base64::decode(&req.signature) {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid base64 signature format".to_string()),
+            }));
+        }
+    };
+
+    // Check signature length
+    if signature_bytes.len() != 64 {
+        return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+            success: false,
+            data: None,
+            error: Some("Invalid signature length".to_string()),
+        }));
+    }
+
+    let signature = match Signature::try_from(signature_bytes.as_slice()) {
+        Ok(sig) => sig,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid signature bytes".to_string()),
+            }));
+        }
+    };
+
+    let pubkey = match Pubkey::from_str(&req.pubkey) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(VerifyMessageResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid pubkey format".to_string()),
+            }));
+        }
+    };
 
     let valid = signature.verify(pubkey.as_ref(), req.message.as_bytes());
 
-    Ok(Json(VerifyMessageResponse {
+    (StatusCode::OK, Json(VerifyMessageResponse {
         success: true,
-        data: VerifyMessageData {
+        data: Some(VerifyMessageData {
             valid,
             message: req.message,
             pubkey: req.pubkey,
-        },
+        }),
+        error: None,
     }))
 }
 
+// 6. Send SOL
 #[derive(Deserialize)]
 struct SendSolRequest {
     from: String,
@@ -234,7 +507,10 @@ struct SendSolRequest {
 #[derive(Serialize)]
 struct SendSolResponse {
     success: bool,
-    data: SendSolData,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<SendSolData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -244,29 +520,86 @@ struct SendSolData {
     instruction_data: String,
 }
 
-async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> Result<Json<SendSolResponse>, (StatusCode, Json<ErrorResponse>)> {
+async fn send_sol_handler(Json(req): Json<SendSolRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.from.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("from is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.to.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("to is required and cannot be empty".to_string()),
+        }));
+    }
     if req.lamports == 0 {
-        return Err(ErrorResponse::new("Transfer amount must be greater than 0"));
+        return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("lamports must be greater than 0".to_string()),
+        }));
+    }
+    if req.lamports < 5000 {
+        return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("lamports must be at least 5000 (minimum rent exemption)".to_string()),
+        }));
     }
 
-    let from_pubkey = Pubkey::from_str(&req.from).map_err(|_| ErrorResponse::new("Invalid from pubkey"))?;
-    let to_pubkey = Pubkey::from_str(&req.to).map_err(|_| ErrorResponse::new("Invalid to pubkey"))?;
+    // Validate pubkey formats
+    let from_pubkey = match Pubkey::from_str(&req.from) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid from address format".to_string()),
+            }));
+        }
+    };
+    let to_pubkey = match Pubkey::from_str(&req.to) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid to address format".to_string()),
+            }));
+        }
+    };
+
+    // Check if from and to are the same
+    if from_pubkey == to_pubkey {
+        return (StatusCode::BAD_REQUEST, Json(SendSolResponse {
+            success: false,
+            data: None,
+            error: Some("from and to addresses cannot be the same".to_string()),
+        }));
+    }
 
     let ix = system_instruction::transfer(&from_pubkey, &to_pubkey, req.lamports);
+
     let program_id = ix.program_id.to_string();
     let accounts = ix.accounts.iter().map(|meta| meta.pubkey.to_string()).collect();
     let instruction_data = base64::encode(ix.data);
 
-    Ok(Json(SendSolResponse {
+    (StatusCode::OK, Json(SendSolResponse {
         success: true,
-        data: SendSolData {
+        data: Some(SendSolData {
             program_id,
             accounts,
             instruction_data,
-        },
+        }),
+        error: None,
     }))
 }
 
+// 7. Send Token
 #[derive(Deserialize)]
 struct SendTokenRequest {
     destination: String,
@@ -276,25 +609,110 @@ struct SendTokenRequest {
 }
 
 #[derive(Serialize)]
-struct SendTokenResponse {
-    success: bool,
-    data: SendTokenData,
-}
-
-#[derive(Serialize)]
 struct SendTokenData {
     program_id: String,
     accounts: Vec<AccountMetaInfo>,
     instruction_data: String,
 }
 
-async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Result<Json<SendTokenResponse>, (StatusCode, Json<ErrorResponse>)> {
-    let destination = Pubkey::from_str(&req.destination).map_err(|_| ErrorResponse::new("Invalid destination pubkey"))?;
-    let mint = Pubkey::from_str(&req.mint).map_err(|_| ErrorResponse::new("Invalid mint pubkey"))?;
-    let owner = Pubkey::from_str(&req.owner).map_err(|_| ErrorResponse::new("Invalid owner pubkey"))?;
+#[derive(Serialize)]
+struct SendTokenResponse {
+    success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data: Option<SendTokenData>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
-    let ix = transfer_checked(&spl_token::id(), &owner, &mint, &destination, &owner, &[], req.amount, 0)
-        .map_err(|_| ErrorResponse::new("Failed to create transfer_checked instruction"))?;
+async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> impl IntoResponse {
+    // Validate required fields
+    if req.destination.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("destination is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.mint.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("mint is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.owner.trim().is_empty() {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("owner is required and cannot be empty".to_string()),
+        }));
+    }
+    if req.amount == 0 {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("amount must be greater than 0".to_string()),
+        }));
+    }
+    if req.amount > u64::MAX / 2 {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("amount is too large".to_string()),
+        }));
+    }
+
+    // Validate pubkey formats
+    let destination = match Pubkey::from_str(&req.destination) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid destination format".to_string()),
+            }));
+        }
+    };
+    let mint = match Pubkey::from_str(&req.mint) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid mint format".to_string()),
+            }));
+        }
+    };
+    let owner = match Pubkey::from_str(&req.owner) {
+        Ok(pk) => pk,
+        Err(_) => {
+            return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid owner format".to_string()),
+            }));
+        }
+    };
+
+    // Check if destination and owner are the same
+    if destination == owner {
+        return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+            success: false,
+            data: None,
+            error: Some("destination and owner cannot be the same".to_string()),
+        }));
+    }
+
+    let ix = match transfer_checked(&spl_token::id(), &owner, &mint, &destination, &owner, &[], req.amount, 0) {
+        Ok(ix) => ix,
+        Err(e) => {
+            return (StatusCode::BAD_REQUEST, Json(SendTokenResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to create transfer instruction: {}", e)),
+            }));
+        }
+    };
 
     let accounts = ix.accounts.iter().map(|meta| AccountMetaInfo {
         pubkey: meta.pubkey.to_string(),
@@ -304,19 +722,24 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Result<Json<Se
 
     let instruction_data = base64::encode(ix.data);
 
-    Ok(Json(SendTokenResponse {
+    (StatusCode::OK, Json(SendTokenResponse {
         success: true,
-        data: SendTokenData {
+        data: Some(SendTokenData {
             program_id: ix.program_id.to_string(),
             accounts,
             instruction_data,
-        },
+        }),
+        error: None,
     }))
 }
 
 #[tokio::main]
 async fn main() {
-    let port = 8080;
+    let port = std::env::var("PORT")
+        .ok()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(8080);
+
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     let app = Router::new()
