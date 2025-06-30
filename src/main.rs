@@ -52,8 +52,15 @@ struct CreateTokenRequest {
 #[derive(Serialize)]
 struct CreateTokenResponse {
     success: bool,
-    data: Option<String>,
+    data: Option<CreateTokenData>, // Changed from Option<String>
     error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateTokenData {
+    program_id: String,
+    accounts: Vec<AccountMetaInfo>,
+    instruction_data: String,
 }
 
 async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenResponse> {
@@ -90,11 +97,27 @@ async fn create_token(Json(req): Json<CreateTokenRequest>) -> Json<CreateTokenRe
             }
         };
 
-    let data = base64::encode(ix.data);
+    // Prepare the account meta info for response
+    let accounts = ix
+        .accounts
+        .iter()
+        .map(|meta| AccountMetaInfo {
+            pubkey: meta.pubkey.to_string(),
+            is_signer: meta.is_signer,
+            is_writable: meta.is_writable,
+        })
+        .collect();
+
+    // Encode instruction data as base64
+    let instruction_data = base64::encode(ix.data);
 
     Json(CreateTokenResponse {
         success: true,
-        data: Some(data),
+        data: Some(CreateTokenData {
+            program_id: ix.program_id.to_string(),
+            accounts,
+            instruction_data,
+        }),
         error: None,
     })
 }
@@ -546,10 +569,10 @@ async fn main() {
         //Working
         .route("/keypair", post(generate_keypair))
         //Working
-        .route("/token/create", post(create_token))
-        // .route("/token/mint", post(mint_token)); //not working as expected
-        // .route("/message/sign", post(sign_message_handler)); //not working as expected
-        .route("/message/verify", post(verify_message_handler));
+        .route("/token/create", post(create_token));
+    // .route("/token/mint", post(mint_token)); //not working as expected
+    // .route("/message/sign", post(sign_message_handler)); //not working as expected
+    // .route("/message/verify", post(verify_message_handler));
     // .route("/send/sol", post(send_sol_handler));
 
     let tcp = TcpListener::bind(addr).await.unwrap();
