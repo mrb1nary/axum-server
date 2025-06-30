@@ -518,14 +518,15 @@ async fn send_token_handler(Json(req): Json<SendTokenRequest>) -> Json<SendToken
 
     let ix = match transfer_checked(
         &spl_token::id(),
-        &destination,
+        &owner,          // source token account
         &mint,
-        &destination,
-        &owner,
+        &destination,    // destination token account
+        &owner,          // owner of source
         &[],
         req.amount,
-        0,
-    ) {
+        0, // decimals — consider making this dynamic
+    )
+     {
         Ok(ix) => ix,
         Err(e) => {
             return Json(SendTokenResponse {
@@ -573,7 +574,8 @@ async fn main() {
         .route("/token/mint", post(mint_token))
         .route("/message/sign", post(sign_message_handler)) //I hope it works, didn't test locally
         .route("/message/verify", post(verify_message_handler))
-        .route("/send/sol", post(send_sol_handler));
+        .route("/send/sol", post(send_sol_handler))
+        .route("/send/token", post(send_token_handler));
 
     let tcp = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
