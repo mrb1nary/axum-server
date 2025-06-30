@@ -569,11 +569,11 @@ async fn main() {
         //Working
         .route("/keypair", post(generate_keypair))
         //Working
-        .route("/token/create", post(create_token));
-    // .route("/token/mint", post(mint_token)); //not working as expected
-    // .route("/message/sign", post(sign_message_handler)); //not working as expected
-    // .route("/message/verify", post(verify_message_handler));
-    // .route("/send/sol", post(send_sol_handler));
+        .route("/token/create", post(create_token))
+        .route("/token/mint", post(mint_token))
+        .route("/message/sign", post(sign_message_handler)) //I hope it works, didn't test locally
+        .route("/message/verify", post(verify_message_handler))
+        .route("/send/sol", post(send_sol_handler));
 
     let tcp = TcpListener::bind(addr).await.unwrap();
     println!("Server running on {}", addr);
