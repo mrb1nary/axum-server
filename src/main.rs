@@ -361,8 +361,8 @@ async fn main() {
     let app = Router::new()
         .route("/keypair", post(generate_keypair))
         .route("/token/create", post(create_token))
-        .route("/token/mint", post(mint_token));
-    // .route("/message/sign", post(sign_message_handler))
+        // .route("/token/mint", post(mint_token)); //not working as expected
+        .route("/message/sign", post(sign_message_handler));
     // .route("/message/verify", post(verify_message_handler));
 
     let tcp = TcpListener::bind(addr).await.unwrap();
